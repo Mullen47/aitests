@@ -14,13 +14,17 @@ python3 -m http.server -d star-dodger 8000   # then visit http://localhost:8000
 - **Start / restart:** Space, Enter, or tap
 - **Pause:** P
 
-Dodge the red meteors and grab the yellow stars for +50 points. The game speeds up
-the longer you survive. Your best score is saved in the browser's localStorage.
+You earn 10 points for every second you survive. Dodge the red meteors and grab
+the yellow stars for +50 points. The game speeds up the longer you survive. Your
+best score is saved in the browser's localStorage.
 
 ## Tweak it
 
 All of the game lives in the `<script>` block in `index.html`:
 
 - `speed = 1 + elapsed / 25` sets how fast the difficulty ramps up
-- `spawnTimer` sets how often meteors appear
+- `spawnTimer = Math.max(0.12, 0.7 / speed) * ...` sets how often meteors appear
+  (lower numbers mean more meteors)
+- `starTimer = 2.5 + Math.random() * 3` sets how often stars appear, in seconds
+- `score += dt * 10` is the number of points per second survived
 - `score += 50` is the bonus for a star
