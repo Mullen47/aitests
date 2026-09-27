@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Star Dodger</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: rgba(255, 255, 255, 0.06);
+    --text: #e8ecff;
+    --muted: #8a93b8;
+    --ship: #5eead4;
+    --star: #facc15;
+    --rock: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #hud { position: fixed; top: 12px; left: 16px; right: 16px; display: flex;
+    justify-content: space-between; font-variant-numeric: tabular-nums; pointer-events: none;
+    font-size: 18px; }
+  #overlay { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; }
+  #card { background: var(--panel); backdrop-filter: blur(6px); border-radius: 16px;
+    padding: 24px 28px; text-align: center; max-width: 340px; margin: 16px; }
+  #card h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: 1px; }
+  #card p { margin: 6px 0; color: var(--muted); line-height: 1.4; }
+  #card .go { color: var(--text); font-weight: 600; margin-top: 14px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"><span id="score">Score 0</span><span id="best">Best 0</span></div>
+<div id="overlay">
+  <div id="card">
+    <h1 id="title">Star Dodger</h1>
+    <p id="msg">Dodge the red meteors. Grab yellow stars for +50.</p>
+    <p>Move: ← → / A D, or drag with your finger.<br>P to pause.</p>
+    <p class="go">Press Space or tap to start</p>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const overlay = document.getElementById('overlay');
+  const titleEl = document.getElementById('title');
+  const msgEl = document.getElementById('msg');
+
+  let W = 0, H = 0, dpr = 1;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // High score survives reloads when storage is available.
+  let best = 0;
+  try { best = Number(localStorage.getItem('starDodgerBest')) || 0; } catch {}
+  bestEl.textContent = 'Best ' + best;
+
+  // Background parallax stars, purely decorative.
+  const bg = Array.from({ length: 120 }, () => ({
+    x: Math.random(), y: Math.random(), z: Math.random() * 0.8 + 0.2
+  }));
+
+  const keys = {};
+  let state = 'menu'; // menu | playing | paused | over
+  let ship, rocks, stars, sparks, score, elapsed, spawnTimer, starTimer, touchX;
+
+  function reset() {
+    ship = { x: W / 2, y: H - 80, r: 14, vx: 0 };
+    rocks = []; stars = []; sparks = [];
+    score = 0; elapsed = 0; spawnTimer = 0; starTimer = 2; touchX = null;
+  }
+
+  function start() {
+    reset();
+    state = 'playing';
+    overlay.classList.add('hidden');
+  }
+
+  function gameOver() {
+    state = 'over';
+    burst(ship.x, ship.y, getComputedStyle(document.documentElement).getPropertyValue('--ship'), 40);
+    const final = Math.floor(score);
+    const isBest = final > best;
+    if (isBest) {
+      best = final;
+      try { localStorage.setItem('starDodgerBest', String(best)); } catch {}
+      bestEl.textContent = 'Best ' + best;
+    }
+    titleEl.textContent = isBest ? 'New best!' : 'Boom!';
+    msgEl.textContent = 'You scored ' + final + '.';
+    setTimeout(() => overlay.classList.remove('hidden'), 600);
+  }
+
+  function burst(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, s = Math.random() * 260 + 60;
+      sparks.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.8, color });
+    }
+  }
+
+  // Input
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      if (state === 'menu' || state === 'over') start();
+    }
+    if (e.key.toLowerCase() === 'p' && (state === 'playing' || state === 'paused')) {
+      state = state === 'playing' ? 'paused' : 'playing';
+      titleEl.textContent = 'Paused';
+      msgEl.textContent = 'Press P to resume.';
+      overlay.classList.toggle('hidden', state === 'playing');
+    }
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+  canvas.addEventListener('pointerdown', e => {
+    if (state === 'menu' || state === 'over') start();
+    touchX = e.clientX;
+  });
+  canvas.addEventListener('pointermove', e => { if (touchX !== null) touchX = e.clientX; });
+  window.addEventListener('pointerup', () => { touchX = null; });
+
+  function update(dt) {
+    for (const s of bg) {
+      s.y += s.z * dt * (state === 'playing' ? 0.25 + elapsed * 0.004 : 0.08);
+      if (s.y > 1) { s.y = 0; s.x = Math.random(); }
+    }
+    for (const p of sparks) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.96; p.vy *= 0.96; p.life -= dt; }
+    sparks = sparks.filter(p => p.life > 0);
+    if (state !== 'playing') return;
+
+    elapsed += dt;
+    score += dt * 10;
+    const speed = 1 + elapsed / 25; // difficulty ramps up over time
+
+    // Ship movement: keyboard accelerates, touch follows the finger.
+    const left = keys['arrowleft'] || keys['a'];
+    const right = keys['arrowright'] || keys['d'];
+    if (touchX !== null) {
+      ship.vx = (touchX - ship.x) * 12;
+    } else {
+      const accel = 2600;
+      if (left) ship.vx -= accel * dt;
+      if (right) ship.vx += accel * dt;
+      ship.vx *= Math.pow(0.0015, dt); // friction
+    }
+    ship.x = Math.max(ship.r, Math.min(W - ship.r, ship.x + ship.vx * dt));
+    ship.y = H - 80;
+
+    // Spawning
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      const r = 10 + Math.random() * 22;
+      rocks.push({ x: Math.random() * W, y: -r, r, vy: (140 + Math.random() * 120) * speed,
+        vx: (Math.random() - 0.5) * 60, rot: 0, spin: (Math.random() - 0.5) * 4 });
+      spawnTimer = Math.max(0.12, 0.7 / speed) * (0.6 + Math.random() * 0.8);
+    }
+    starTimer -= dt;
+    if (starTimer <= 0) {
+      stars.push({ x: 20 + Math.random() * (W - 40), y: -12, r: 10, vy: 160 * speed, t: 0 });
+      starTimer = 2.5 + Math.random() * 3;
+    }
+
+    for (const r of rocks) { r.y += r.vy * dt; r.x += r.vx * dt; r.rot += r.spin * dt; }
+    for (const s of stars) { s.y += s.vy * dt; s.t += dt; }
+    rocks = rocks.filter(r => r.y - r.r < H + 40);
+
+    // Collisions (slightly forgiving hitbox)
+    for (const r of rocks) {
+      if (Math.hypot(r.x - ship.x, r.y - ship.y) < r.r * 0.85 + ship.r * 0.8) { gameOver(); break; }
+    }
+    stars = stars.filter(s => {
+      if (Math.hypot(s.x - ship.x, s.y - ship.y) < s.r + ship.r) {
+        score += 50;
+        burst(s.x, s.y, '#facc15', 18);
+        return false;
+      }
+      return s.y < H + 20;
+    });
+
+    scoreEl.textContent = 'Score ' + Math.floor(score);
+  }
+
+  function drawStar(x, y, r, rot) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = rot + (i * Math.PI) / 5, rr = i % 2 ? r * 0.45 : r;
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath();
+  }
+
+  function draw() {
+    ctx.fillStyle = '#0b1020';
+    ctx.fillRect(0, 0, W, H);
+
+    for (const s of bg) {
+      ctx.fillStyle = `rgba(200,210,255,${s.z * 0.8})`;
+      ctx.fillRect(s.x * W, s.y * H, s.z * 2, s.z * 2);
+    }
+
+    for (const s of stars) {
+      ctx.save();
+      ctx.shadowColor = '#facc15'; ctx.shadowBlur = 16;
+      ctx.fillStyle = '#facc15';
+      drawStar(s.x, s.y, s.r + Math.sin(s.t * 8) * 1.5, s.t * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    for (const r of rocks) {
+      ctx.save();
+      ctx.translate(r.x, r.y); ctx.rotate(r.rot);
+      ctx.fillStyle = '#f87171';
+      ctx.beginPath();
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * Math.PI * 2, k = 0.75 + ((i * 37) % 10) / 40;
+        ctx.lineTo(Math.cos(a) * r.r * k, Math.sin(a) * r.r * k);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+
+    if (state !== 'over' && ship) {
+      ctx.save();
+      ctx.shadowColor = '#5eead4'; ctx.shadowBlur = 20;
+      ctx.fillStyle = '#5eead4';
+      ctx.beginPath();
+      ctx.moveTo(ship.x, ship.y - ship.r * 1.4);
+      ctx.lineTo(ship.x + ship.r, ship.y + ship.r);
+      ctx.lineTo(ship.x, ship.y + ship.r * 0.5);
+      ctx.lineTo(ship.x - ship.r, ship.y + ship.r);
+      ctx.closePath(); ctx.fill();
+      if (state === 'playing') { // engine flame
+        ctx.fillStyle = '#fb923c';
+        ctx.beginPath();
+        ctx.moveTo(ship.x - 5, ship.y + ship.r * 0.7);
+        ctx.lineTo(ship.x, ship.y + ship.r * (1.4 + Math.random() * 0.6));
+        ctx.lineTo(ship.x + 5, ship.y + ship.r * 0.7);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    for (const p of sparks) {
+      ctx.globalAlpha = Math.max(0, p.life / 0.8);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  reset();
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
